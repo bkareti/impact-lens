@@ -1,0 +1,8 @@
+{
+  "packageDirectories": [
+    { "path": "force-app", "default": true }
+  ],
+  "name": "impactlens-smoke",
+  "namespace": "",
+  "sourceApiVersion": "60.0"
+}

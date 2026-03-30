@@ -1,0 +1,247 @@
+{
+  "name": "impactlens",
+  "displayName": "ImpactLens - Salesforce Dependency Analyzer",
+  "description": "Powerful search and impact analysis for Salesforce DX projects. Search fields, objects, metadata, and keywords across your entire project with dependency mapping.",
+  "version": "3.0.0",
+  "publisher": "BabuKareti",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BabuKareti/sf-advanced-search"
+  },
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "salesforce",
+    "apex",
+    "sfdx",
+    "search",
+    "impact analysis",
+    "lightning",
+    "lwc",
+    "metadata",
+    "dependency"
+  ],
+  "icon": "resources/icon.png",
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/sfdx-project.json",
+    "onCommand:sfSearch.search",
+    "onCommand:sfSearch.impactAnalysis",
+    "onCommand:sfSearch.fieldUsage",
+    "onCommand:sfSearch.objectUsage",
+    "onCommand:sfSearch.rebuildIndex",
+    "onCommand:sfSearch.searchFromEditor",
+    "onCommand:sfSearch.searchSelection",
+    "onCommand:sfSearch.analyzeImpact",
+    "onCommand:sfSearch.exportImpact",
+    "onCommand:sfSearch.exportResults",
+    "onCommand:sfSearch.searchHistory"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "sfSearch.search",
+        "title": "ImpactLens: Open Search Panel",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sfSearch.impactAnalysis",
+        "title": "ImpactLens: Impact Analysis",
+        "icon": "$(references)"
+      },
+      {
+        "command": "sfSearch.fieldUsage",
+        "title": "ImpactLens: Find Field Usage",
+        "icon": "$(symbol-field)"
+      },
+      {
+        "command": "sfSearch.objectUsage",
+        "title": "ImpactLens: Find Object Usage",
+        "icon": "$(symbol-class)"
+      },
+      {
+        "command": "sfSearch.rebuildIndex",
+        "title": "ImpactLens: Rebuild Index",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sfSearch.searchFromEditor",
+        "title": "ImpactLens: Search Word at Cursor",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sfSearch.searchSelection",
+        "title": "ImpactLens: Search Selection",
+        "icon": "$(search)"
+      },
+      {
+        "command": "sfSearch.analyzeImpact",
+        "title": "ImpactLens: Analyze Impact",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "sfSearch.exportImpact",
+        "title": "ImpactLens: Export Impact Report",
+        "icon": "$(export)"
+      },
+      {
+        "command": "sfSearch.exportResults",
+        "title": "ImpactLens: Export Search Results",
+        "icon": "$(export)"
+      },
+      {
+        "command": "sfSearch.searchHistory",
+        "title": "ImpactLens: Search History",
+        "icon": "$(history)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sfSearch",
+          "title": "ImpactLens",
+          "icon": "resources/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sfSearch": [
+        {
+          "id": "sfSearch.resultsView",
+          "name": "Search Results",
+          "type": "tree"
+        },
+        {
+          "id": "sfSearch.impactView",
+          "name": "Impact Analysis",
+          "type": "tree"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "sfSearch.searchSelection",
+          "group": "sfSearch@0",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "sfSearch.fieldUsage",
+          "group": "sfSearch@1",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sfSearch.objectUsage",
+          "group": "sfSearch@2",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sfSearch.impactAnalysis",
+          "group": "sfSearch@3",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sfSearch.searchFromEditor",
+          "group": "sfSearch@4",
+          "when": "editorTextFocus"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "sfSearch.rebuildIndex",
+          "when": "view == sfSearch.resultsView",
+          "group": "navigation"
+        },
+        {
+          "command": "sfSearch.exportResults",
+          "when": "view == sfSearch.resultsView",
+          "group": "navigation"
+        },
+        {
+          "command": "sfSearch.exportImpact",
+          "when": "view == sfSearch.impactView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ImpactLens",
+      "properties": {
+        "sfSearch.excludePatterns": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/.sfdx/**",
+            "**/.sf/**"
+          ],
+          "description": "Glob patterns to exclude from indexing."
+        },
+        "sfSearch.maxFileSize": {
+          "type": "number",
+          "default": 1048576,
+          "description": "Maximum file size in bytes to index (default 1MB)."
+        },
+        "sfSearch.debounceDelay": {
+          "type": "number",
+          "default": 300,
+          "description": "Delay in ms before re-indexing after a file change."
+        },
+        "sfSearch.enableToolingApi": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Salesforce Tooling API integration for enriched dependency data."
+        },
+        "sfSearch.fuzzyTolerance": {
+          "type": "number",
+          "default": 0.2,
+          "description": "Fuzzy search tolerance (0 = exact, 1 = very fuzzy)."
+        },
+        "sfSearch.impactDepth": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum depth for multi-hop impact analysis traversal (1-5)."
+        },
+        "sfSearch.orgQueryConcurrency": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Number of parallel Tooling API queries during org cache build."
+        },
+        "sfSearch.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show reference counts as CodeLens above Apex/LWC/Aura declarations."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src --ext ts",
+    "compile": "tsc -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.74.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.0",
+    "minisearch": "^6.3.0"
+  }
+}
