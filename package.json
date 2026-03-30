@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/BabuKareti/sf-advanced-search"
+    "url": "https://github.com/bkareti/impact-lens"
   },
   "engines": {
     "vscode": "^1.74.0"

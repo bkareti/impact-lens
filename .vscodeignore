@@ -9,3 +9,8 @@ tsconfig.json
 esbuild.js
 .eslintrc*
 debug-*.js
+.sfdx/
+.sf/
+.github/
+resources/iconOld.png
+sf-advanced-search.code-workspace
