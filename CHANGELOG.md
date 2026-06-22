@@ -6,6 +6,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and 
 
 ---
 
+## [3.1.0] – 2026-06-22
+
+### 🛠️ Hardening — Accurate Search, Faster Lookups, Leaner Commands
+
+#### ✨ Added
+
+- **Precise-by-default matching** — searching `Account` now matches `Account` and `Account.Name` but **not** `AccountService`. Backed by a new precise tokenizer (whole identifier + dot/underscore segments, never camelCase). Shared tokenizers live in `src/indexing/tokenize.ts`.
+- **Broad (contains) toggle** — opt-in substring matching in the search panel for when you want wider recall; mutually exclusive with Exact match.
+- **`sfSearch.enableHover` setting** — toggle the hover impact summary independently from CodeLens (default `true`).
+- **One-click Connected-Org enablement** — switching to Connected-Org mode without the Tooling API enabled now shows a friendly notice with an **Enable Connected-Org Search** button instead of a settings error.
+- **Focused unit test suite** (Vitest) covering tokenization/matching precision and the file parser; `npm test` script added.
+- **Large-project warning** — a one-time notice when file discovery hits the per-pattern cap, so an incomplete index is never silent.
+
+#### ⚡ Performance
+
+- **O(1)-style reference lookups** — search, impact analysis, CodeLens, and Hover now use derived exact/token indexes instead of scanning the entire reference graph on every query, hover, and keystroke. Large orgs feel dramatically snappier.
+- **Debounced index persistence** — rapid file saves coalesce into a single write instead of repeatedly serializing the whole index to disk.
+
+#### 🐛 Fixed
+
+- **Impact analysis false positives** — removed bidirectional substring matching that produced spurious transitive dependencies and inflated risk scores.
+- **Dropped references on the same line** — search and impact dedup keys now include column + keyword, so multiple distinct references on one line are all kept.
+- **Blank Search Results tree rows for org results** — items now label from the component name (`fileName`) and fall back gracefully when there's no local file.
+- **Misleading "no dependents" for org searches** — the Impact view now shows an informational notice (impact analysis applies to Local Project searches) instead of a false empty result.
+- **Reliable sidebar wiring** — tree views update via a stable, panel-independent search event, and the search panel reliably auto-opens when the view is already visible at activation.
+- **Hover gated by the wrong setting** — hover honored `enableCodeLens`; it now uses `enableHover`.
+- **CLI detection** — `isCliAvailable()` re-probes on a TTL so installing the Salesforce CLI mid-session is detected.
+
+#### 🔧 Changed
+
+- **Commands consolidated 12 → 7** — `fieldUsage`, `objectUsage`, `searchFromEditor`, and `searchSelection` merged into **Search Selection or Word at Cursor**; `impactAnalysis` merged into **Analyze Impact**. Redundant `onCommand:*` activation events removed (activation via `workspaceContains`).
+- **Index schema version bumped to 3** — triggers a one-time reindex on first launch after upgrade.
+
+#### 🧹 Removed
+
+- Dead code: unused `queryFieldDependencies` / `queryObjectDependencies` and the orphaned SOQL sanitizer, and unused `searchFieldUsage` / `searchObjectUsage`.
+- Stale committed `.vsix` binaries and `debug-*.js` scripts; added an ESLint config so `npm run lint` works.
+
+---
+
 ## [3.0.0] – 2026-03-30
 
 ### 🚀 Major — Multi-Hop Impact Analysis, Risk Scoring & New Providers

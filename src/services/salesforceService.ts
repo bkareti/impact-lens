@@ -35,6 +35,9 @@ interface CachedComponent {
 /** Progress callback for UI updates during cache build. */
 export type OrgCacheProgressFn = (stage: string, done: number, total: number) => void;
 
+/** How long a CLI-availability probe result stays cached (ms). */
+const CLI_CHECK_TTL_MS = 60_000;
+
 /**
  * Provides integration with the Salesforce CLI (sf / sfdx).
  */
@@ -42,6 +45,7 @@ export class SalesforceService implements IMetadataProvider {
   private outputChannel: vscode.OutputChannel;
   private packageDirectories: string[] = [];
   private cliAvailable: boolean | null = null;
+  private cliCheckedAt = 0;
   private sfdxProjectPath: string | null = null;
 
   /** In-memory metadata cache: populated once, searched locally. */
@@ -92,7 +96,10 @@ export class SalesforceService implements IMetadataProvider {
    * Check if the Salesforce CLI is available (sf or sfdx).
    */
   async isCliAvailable(): Promise<boolean> {
-    if (this.cliAvailable !== null) {
+    // Re-probe periodically so installing the CLI mid-session is detected,
+    // but cache a positive/negative result to avoid spawning on every query.
+    const now = Date.now();
+    if (this.cliAvailable !== null && now - this.cliCheckedAt < CLI_CHECK_TTL_MS) {
       return this.cliAvailable;
     }
 
@@ -108,6 +115,7 @@ export class SalesforceService implements IMetadataProvider {
       }
     }
 
+    this.cliCheckedAt = now;
     this.outputChannel.appendLine(
       `[SF] CLI available: ${this.cliAvailable}`
     );
@@ -193,41 +201,11 @@ export class SalesforceService implements IMetadataProvider {
   }
 
   /**
-   * Sanitize a value for use in SOQL WHERE clauses.
-   * Rejects anything outside [a-zA-Z0-9_.] to prevent injection.
-   */
-  private sanitizeSoqlParam(value: string): string {
-    if (!/^[a-zA-Z0-9_.]+$/.test(value)) {
-      throw new Error(`Invalid SOQL parameter: "${value}" contains disallowed characters.`);
-    }
-    return value;
-  }
-
-  /**
    * Get the configured org query concurrency.
    */
   private getOrgQueryConcurrency(): number {
     const config = vscode.workspace.getConfiguration('sfSearch');
     return config.get<number>('orgQueryConcurrency', 3);
-  }
-
-  /**
-   * Query field usage from server-side metadata (e.g., page layouts, reports).
-   */
-  async queryFieldDependencies(objectName: string, fieldName: string): Promise<unknown[]> {
-    const safeObj = this.sanitizeSoqlParam(objectName);
-    const safeField = this.sanitizeSoqlParam(fieldName);
-    const soql = `SELECT MetadataComponentId, MetadataComponentName, MetadataComponentType, RefMetadataComponentName, RefMetadataComponentType FROM MetadataComponentDependency WHERE RefMetadataComponentName = '${safeObj}.${safeField}'`;
-    return this.queryToolingApi(soql);
-  }
-
-  /**
-   * Query object references across the org metadata.
-   */
-  async queryObjectDependencies(objectName: string): Promise<unknown[]> {
-    const safeObj = this.sanitizeSoqlParam(objectName);
-    const soql = `SELECT MetadataComponentId, MetadataComponentName, MetadataComponentType, RefMetadataComponentName, RefMetadataComponentType FROM MetadataComponentDependency WHERE RefMetadataComponentName = '${safeObj}'`;
-    return this.queryToolingApi(soql);
   }
 
   /**

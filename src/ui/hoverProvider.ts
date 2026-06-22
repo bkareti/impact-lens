@@ -17,7 +17,7 @@ export class SfHoverProvider implements vscode.HoverProvider {
     position: vscode.Position,
   ): vscode.Hover | null {
     const config = vscode.workspace.getConfiguration('sfSearch');
-    if (!config.get<boolean>('enableCodeLens', true)) {
+    if (!config.get<boolean>('enableHover', true)) {
       return null;
     }
 
@@ -31,26 +31,19 @@ export class SfHoverProvider implements vscode.HoverProvider {
       return null;
     }
 
-    const graph = this.indexer.getReferenceGraph();
-    const normalizedWord = word.toLowerCase();
-    let totalRefs = 0;
-    const fileSet = new Set<string>();
-    const typeSet = new Set<string>();
-
-    for (const [keyword, entries] of graph.entries()) {
-      const keyLower = keyword.toLowerCase();
-      if (keyLower === normalizedWord) {
-        for (const entry of entries) {
-          totalRefs++;
-          fileSet.add(entry.fileName);
-          typeSet.add(entry.metadataType);
-        }
-      }
-    }
-
-    if (totalRefs === 0) {
+    // Exact-keyword lookup via the indexer's derived index (no full scan).
+    const entries = this.indexer.lookupExact(word);
+    if (entries.length === 0) {
       return null;
     }
+
+    const fileSet = new Set<string>();
+    const typeSet = new Set<string>();
+    for (const entry of entries) {
+      fileSet.add(entry.fileName);
+      typeSet.add(entry.metadataType);
+    }
+    const totalRefs = entries.length;
 
     const md = new vscode.MarkdownString();
     md.isTrusted = true;

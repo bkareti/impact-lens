@@ -105,17 +105,7 @@ export class SfCodeLensProvider implements vscode.CodeLensProvider {
   }
 
   private countReferences(name: string): number {
-    const graph = this.indexer.getReferenceGraph();
-    const normalizedName = name.toLowerCase();
-    let count = 0;
-
-    for (const [keyword, entries] of graph.entries()) {
-      const keyLower = keyword.toLowerCase();
-      if (keyLower === normalizedName || keyLower.includes(normalizedName)) {
-        count += entries.length;
-      }
-    }
-
-    return count;
+    // Precise, O(1)-ish lookup via the indexer's derived token index.
+    return this.indexer.countReferences(name);
   }
 }

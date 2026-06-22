@@ -134,8 +134,11 @@ export class ResultsViewProvider implements vscode.TreeDataProvider<ResultTreeIt
     const sorted = this._sortResults(filtered);
 
     return sorted.map((r) => {
-      const fileName = path.basename(r.filePath);
-      const relPath = this._toRelativePath(r.filePath);
+      // Prefer the result's fileName (set for both local files and org
+      // components); fall back to the path basename, then the matched keyword.
+      const hasFile = Boolean(r.filePath);
+      const fileName = r.fileName || (hasFile ? path.basename(r.filePath) : r.keyword) || '(unknown)';
+      const location = hasFile ? this._toRelativePath(r.filePath) : (r.objectName || `${r.metadataType} (org)`);
       const snippet = r.snippet?.trim().replace(/\s+/g, ' ') ?? '';
       const preview = snippet.length > 90 ? snippet.substring(0, 87) + '…' : snippet;
 
@@ -159,7 +162,7 @@ export class ResultsViewProvider implements vscode.TreeDataProvider<ResultTreeIt
           r.objectName ? `Object: \`${r.objectName}\`` : '',
           `Score: ${r.score.toFixed(3)}`,
           '',
-          `\`${relPath}\``,
+          `\`${location}\``,
           '',
           preview ? `> ${preview}` : '',
         ]
@@ -169,16 +172,17 @@ export class ResultsViewProvider implements vscode.TreeDataProvider<ResultTreeIt
       tooltipMd.isTrusted = true;
       item.tooltip = tooltipMd;
 
-      // Open on click
-      item.command = {
-        title: 'Open File',
-        command: 'sfSearch.openResult',
-        arguments: [r.filePath, r.line],
-      };
-
-      item.resourceUri = vscode.Uri.file(r.filePath);
+      // Open on click — only for results backed by a real file (not org-only).
+      if (hasFile) {
+        item.command = {
+          title: 'Open File',
+          command: 'sfSearch.openResult',
+          arguments: [r.filePath, r.line],
+        };
+        item.resourceUri = vscode.Uri.file(r.filePath);
+      }
       item.accessibilityInformation = {
-        label: `${fileName}, line ${r.line}, ${metadataType}`,
+        label: `${fileName}, ${metadataType}`,
       };
 
       return item;

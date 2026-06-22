@@ -2,7 +2,7 @@
 
 > **Fast, intelligent search and impact analysis for Salesforce DX projects — right inside VS Code.**
 
-[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](CHANGELOG.md)
 [![VS Code](https://img.shields.io/badge/VS%20Code-1.74%2B-informational)](https://code.visualstudio.com/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -124,19 +124,15 @@ Two Activity Bar panels give you persistent visibility without opening the webvi
 
 ### Quick Reference
 
-| Command                             | Available From                          | Description                                   |
-| ----------------------------------- | --------------------------------------- | --------------------------------------------- |
-| `ImpactLens: Open Search Panel`     | Command Palette, Status Bar             | Open the full search webview                  |
-| `ImpactLens: Impact Analysis`       | Command Palette, Editor Right-Click     | Analyze impact — uses selection or prompts    |
-| `ImpactLens: Analyze Impact`        | Command Palette, CodeLens, Hover        | Run impact analysis for a specific name       |
-| `ImpactLens: Find Field Usage`      | Command Palette, Editor Right-Click     | Search all usages of a field API name         |
-| `ImpactLens: Find Object Usage`     | Command Palette, Editor Right-Click     | Search all usages of an object API name       |
-| `ImpactLens: Search Word at Cursor` | Command Palette, Editor Right-Click     | Search the word under the cursor              |
-| `ImpactLens: Search Selection`      | Editor Right-Click (when text selected) | Search the selected text                      |
-| `ImpactLens: Rebuild Index`         | Command Palette, Results View Toolbar ↻ | Force a complete index rebuild                |
-| `ImpactLens: Export Impact Report`  | Command Palette, Impact View Toolbar ↓  | Export last impact report (CSV/JSON/Markdown) |
-| `ImpactLens: Export Search Results` | Command Palette, Results View Toolbar ↓ | Export search results (CSV/JSON/Markdown)     |
-| `ImpactLens: Search History`        | Command Palette                         | Browse and re-run previous searches           |
+| Command                                       | Available From                          | Description                                   |
+| --------------------------------------------- | --------------------------------------- | --------------------------------------------- |
+| `ImpactLens: Open Search Panel`               | Command Palette, Status Bar             | Open the full search webview                  |
+| `ImpactLens: Search Selection or Word at Cursor` | Command Palette, Editor Right-Click  | Search the selected text, or the word under the cursor |
+| `ImpactLens: Analyze Impact`                  | Command Palette, Editor Right-Click, CodeLens, Hover | Run impact analysis for a name (selection → word → prompt) |
+| `ImpactLens: Rebuild Index`                   | Command Palette, Results View Toolbar ↻ | Force a complete index rebuild                |
+| `ImpactLens: Export Search Results`           | Command Palette, Results View Toolbar ↓ | Export search results (CSV/JSON/Markdown)     |
+| `ImpactLens: Export Impact Report`            | Command Palette, Impact View Toolbar ↓  | Export last impact report (CSV/JSON/Markdown) |
+| `ImpactLens: Search History`                  | Command Palette                         | Browse and re-run previous searches           |
 
 ### Detailed Usage
 
@@ -144,60 +140,35 @@ Two Activity Bar panels give you persistent visibility without opening the webvi
 
 > `Cmd+Shift+P` → **ImpactLens: Open Search Panel** — or click the **ImpactLens** status bar item.
 
-Opens the full-featured search webview. Type any Salesforce API name, field, class name, or keyword and press `Enter`. Use the filter presets and exact-match toggle to refine results. Results are displayed in a sortable, filterable table with click-to-open navigation.
+Opens the full-featured search webview. Type any Salesforce API name, field, class name, or keyword and press `Enter`. Refine results with the filter presets and the match-mode toggles:
 
-#### ⚡ Impact Analysis
+- **Precise (default)** — matches the whole identifier or any dot/underscore segment. `Account` matches `Account` and `Account.Name`, but not `AccountService`.
+- **Broad (contains)** — matches any name that contains your query (wider recall, noisier).
+- **Exact match** — case-insensitive equality only.
 
-> `Cmd+Shift+P` → **ImpactLens: Impact Analysis** — or right-click in any editor.
+Results are displayed in a sortable, filterable table with click-to-open navigation.
 
-Analyzes the blast radius of a metadata element. When invoked:
+#### 🔍 Search Selection or Word at Cursor
 
-- **From editor right-click:** Automatically uses your selected text (no input prompt).
-- **From command palette (no selection):** Shows an input box to type the metadata name.
+> Right-click in editor → **ImpactLens: Search Selection or Word at Cursor** — or via Command Palette.
+
+Grabs your selected text, or the word/dotted name (e.g., `Account.Status__c`) under the cursor, and opens the search panel with results pre-populated.
+
+**Example:** Place the cursor on `Status__c` → right-click → **Search Selection or Word at Cursor** → see every Apex class, flow, validation rule, and layout that references that field.
+
+#### ⚡ Analyze Impact
+
+> `Cmd+Shift+P` → **ImpactLens: Analyze Impact** — right-click in any editor — click a **CodeLens** reference count — or click **Analyze Impact** in a hover tooltip.
+
+Analyzes the blast radius of a metadata element from multiple entry points:
+
+- **CodeLens click:** analyzes the class/component where the CodeLens appears.
+- **Hover link click:** analyzes the API name you hovered over.
+- **Editor / Command palette:** uses selection → word at cursor → input box (smart fallback chain).
 
 Results appear in the **Impact Analysis** sidebar tree with risk scoring, reference counts, and a color-coded risk badge.
 
-**Example:** Select `Account.Industry` in an Apex class → right-click → **ImpactLens: Impact Analysis** → see all files that reference that field across your project.
-
-#### 📊 Analyze Impact
-
-> `Cmd+Shift+P` → **ImpactLens: Analyze Impact** — or click a **CodeLens** reference count — or click **Analyze Impact** in a hover tooltip.
-
-Works from multiple entry points:
-
-- **CodeLens click:** Automatically analyzes the class/component where the CodeLens appears.
-- **Hover link click:** Analyzes the API name you hovered over.
-- **Command palette:** Uses selection → word at cursor → input box (smart fallback chain).
-
-Produces the same risk-scored impact report as "Impact Analysis".
-
-#### 🔎 Find Field Usage
-
-> Right-click in editor → **ImpactLens: Find Field Usage** — or via Command Palette.
-
-Searches for all references to a Salesforce field API name. Uses your selected text, or falls back to the word at cursor. Opens the search panel with results and populates the sidebar Results tree.
-
-**Example:** Place cursor on `Status__c` → right-click → **Find Field Usage** → see every Apex class, flow, validation rule, and layout that references that field.
-
-#### 🔎 Find Object Usage
-
-> Right-click in editor → **ImpactLens: Find Object Usage** — or via Command Palette.
-
-Same as Find Field Usage, but optimized for object API names. Opens the search panel and Results sidebar.
-
-**Example:** Select `Account` → right-click → **Find Object Usage** → see every SOQL query, trigger, flow, and LWC component that references the Account object.
-
-#### 🔍 Search Word at Cursor / Search Selection
-
-> Right-click in editor → **ImpactLens: Search Word at Cursor** (always visible)
-> Right-click in editor → **ImpactLens: Search Selection** (visible when text is selected)
-
-Quick search shortcuts:
-
-- **Search Word at Cursor** — grabs the word or dotted name (e.g., `Account.Status__c`) under your cursor and searches.
-- **Search Selection** — searches the exact highlighted text.
-
-Both open the search panel with results pre-populated.
+**Example:** Select `Account.Industry` in an Apex class → right-click → **Analyze Impact** → see all files that reference that field across your project.
 
 #### ♻️ Rebuild Index
 
@@ -263,6 +234,7 @@ Hover over any Salesforce API name (`Account`, `Status__c`, `MyApexClass`) to se
 | `sfSearch.impactDepth`         | `3`                                                  | Max depth for multi-hop impact traversal (1-5)             |
 | `sfSearch.orgQueryConcurrency` | `3`                                                  | Parallel Tooling API queries during org cache build (1-8)  |
 | `sfSearch.enableCodeLens`      | `true`                                               | Show reference count CodeLens above declarations           |
+| `sfSearch.enableHover`         | `true`                                               | Show a mini impact summary when hovering over API names    |
 
 ---
 
@@ -277,8 +249,9 @@ src/
 │   └── index.ts              # Re-exports
 ├── indexing/
 │   ├── fileParser.ts         # Regex + XML reference extraction (Apex, LWC, Aura, VF, Flow)
+│   ├── tokenize.ts           # Shared tokenizers (full-text recall + precise lookup)
 │   ├── indexWorker.ts        # Worker thread entry point
-│   └── metadataIndexer.ts    # Orchestrator: file discovery, parsing, MiniSearch build
+│   └── metadataIndexer.ts    # Orchestrator: file discovery, parsing, MiniSearch + lookup index
 ├── search/
 │   ├── searchEngine.ts       # Dual-strategy search, export, search history
 │   └── impactAnalyzer.ts     # Multi-hop impact analysis, risk scoring, export
@@ -297,6 +270,8 @@ src/
 ## Release Notes
 
 See [CHANGELOG.md](CHANGELOG.md) for full version history.
+
+**3.1.0** — Precise-by-default search (with Broad & Exact toggles), O(1)-style reference lookups for faster search/CodeLens/Hover on large orgs, debounced index persistence, impact-analysis accuracy fixes (no more false positives/inflated risk), sidebar fixes for org results, commands consolidated 12 → 7, `sfSearch.enableHover` setting, one-click Connected-Org enablement, and a Vitest test suite.
 
 **3.0.0** — Multi-hop impact analysis (up to 5 hops), cycle detection, risk scoring (Low/Medium/High/Critical), CodeLens & Hover providers, Visualforce parser, 6 new metadata types, export (CSV/JSON/Markdown), search history, security hardening (`execFile`), parallel org cache.
 

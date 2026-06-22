@@ -1,10 +1,8 @@
 import * as vscode from 'vscode';
-import MiniSearch, { SearchResult as MiniSearchResult } from 'minisearch';
+import { SearchResult as MiniSearchResult } from 'minisearch';
 import {
   MetadataType,
   SearchResult,
-  IndexDocument,
-  ReferenceEntry,
   ExportFormat,
   SearchHistoryEntry,
 } from '../models/searchResult';
@@ -36,7 +34,10 @@ export interface SearchOptions {
   query: string;
   filters?: SearchFilters;
   maxResults?: number;
+  /** Exact (case-insensitive) whole-keyword equality only. */
   exactMatch?: boolean;
+  /** Broad substring matching (opt-in). Default is precise token matching. */
+  broad?: boolean;
 }
 
 /**
@@ -100,31 +101,36 @@ export class SearchEngine {
    * Perform a search query against the index.
    */
   search(options: SearchOptions): SearchResult[] {
-    const { query, filters, maxResults = 200, exactMatch = false } = options;
+    const { query, filters, maxResults = 200, exactMatch = false, broad = false } = options;
 
     if (!query || query.trim().length === 0) {
       return [];
     }
 
     const startTime = Date.now();
-    const results: SearchResult[] = [];
 
-    // Strategy 1: Direct reference graph lookup (fastest, most precise)
-    const graphResults = this.searchReferenceGraph(query, filters, exactMatch);
-    results.push(...graphResults);
-
-    // Strategy 2: Full-text search via MiniSearch
-    const textResults = this.searchFullText(query, filters, exactMatch);
-
-    // Merge, deduplicate by file+line
+    // Strategy 1: Direct reference graph lookup (precise, line-level).
+    // The dedup key includes column + keyword so multiple distinct references
+    // on the same line are all preserved.
     const seen = new Set<string>();
-    for (const r of results) {
-      seen.add(`${r.filePath}:${r.line}`);
+    const results: SearchResult[] = [];
+    const graphFiles = new Set<string>();
+    for (const r of this.searchReferenceGraph(query, filters, exactMatch, broad)) {
+      const key = `${r.filePath}:${r.line}:${r.column}:${r.keyword.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      graphFiles.add(r.filePath);
+      results.push(r);
     }
-    for (const r of textResults) {
-      const key = `${r.filePath}:${r.line}`;
-      if (!seen.has(key)) {
-        seen.add(key);
+
+    // Strategy 2: Full-text search via MiniSearch (broader recall). These are
+    // file-level (line 0). Skip any file already covered by a precise graph
+    // hit so we never show a worse, line-less duplicate of a known result.
+    for (const r of this.searchFullText(query, filters, exactMatch)) {
+      if (!graphFiles.has(r.filePath)) {
+        graphFiles.add(r.filePath);
         results.push(r);
       }
     }
@@ -144,65 +150,45 @@ export class SearchEngine {
   }
 
   /**
-   * Search the reference graph for keyword matches.
-   * Uses **case-insensitive literal string containment** on the original keyword text.
+   * Search the reference graph via the indexer's fast lookup tables.
    * - exactMatch: only exact (case-insensitive) keyword equality.
-   * - normal: the query must appear as a literal substring within the keyword.
-   *   "getContacts" matches "getContactsList" but NOT "get_Contacts" or "get_Contact".
+   * - broad: case-insensitive substring containment (opt-in, noisier).
+   * - default (precise): exact identifier OR a dot/underscore segment of it.
+   *   "Account" matches `Account` and `Account.Name` but NOT `AccountService`.
    */
-  private searchReferenceGraph(query: string, filters?: SearchFilters, exactMatch: boolean = false): SearchResult[] {
-    const graph = this.indexer.getReferenceGraph();
-    const results: SearchResult[] = [];
+  private searchReferenceGraph(
+    query: string,
+    filters?: SearchFilters,
+    exactMatch: boolean = false,
+    broad: boolean = false,
+  ): SearchResult[] {
     const allowedTypes = this.resolveFilters(filters);
-    const queryLower = query.toLowerCase();
+    const queryLower = query.toLowerCase().trim();
 
-    for (const [keyword, entries] of graph.entries()) {
-      const keyLower = keyword.toLowerCase();
+    const entries = exactMatch
+      ? this.indexer.lookupExact(query)
+      : broad
+        ? this.indexer.lookupBroad(query)
+        : this.indexer.lookupPrecise(query);
 
-      let isMatch: boolean;
-      let relevance: number;
-
-      if (exactMatch) {
-        // Exact mode: only identical keywords match (case-insensitive)
-        isMatch = keyLower === queryLower;
-        relevance = 100;
-      } else {
-        // Normal mode: case-insensitive literal string contains
-        // The query must appear as-is within the keyword.
-        // e.g. query "getContacts" matches keyword "getContactsList" ✓
-        //      query "getContacts" does NOT match "get_Contacts" ✗
-        //      query "Account" matches keyword "AccountService" ✓
-        if (keyLower === queryLower) {
-          isMatch = true;
-          relevance = 100;
-        } else if (keyLower.includes(queryLower)) {
-          isMatch = true;
-          relevance = 50;
-        } else {
-          isMatch = false;
-          relevance = 0;
-        }
+    const results: SearchResult[] = [];
+    for (const entry of entries) {
+      if (allowedTypes && !allowedTypes.has(entry.metadataType)) {
+        continue;
       }
-
-      if (!isMatch) { continue; }
-
-      for (const entry of entries) {
-        if (allowedTypes && !allowedTypes.has(entry.metadataType)) {
-          continue;
-        }
-
-        results.push({
-          keyword: entry.keyword,
-          filePath: entry.filePath,
-          fileName: entry.fileName,
-          metadataType: entry.metadataType,
-          objectName: entry.objectName,
-          line: entry.line,
-          column: entry.column,
-          snippet: entry.snippet,
-          score: relevance,
-        });
-      }
+      // Exact keyword equality outranks segment/substring matches.
+      const relevance = entry.keyword.toLowerCase() === queryLower ? 100 : 50;
+      results.push({
+        keyword: entry.keyword,
+        filePath: entry.filePath,
+        fileName: entry.fileName,
+        metadataType: entry.metadataType,
+        objectName: entry.objectName,
+        line: entry.line,
+        column: entry.column,
+        snippet: entry.snippet,
+        score: relevance,
+      });
     }
 
     return results;
@@ -266,28 +252,6 @@ export class SearchEngine {
     }
 
     return allowed.size > 0 ? allowed : null;
-  }
-
-  /**
-   * Search for all usages of a specific field API name.
-   */
-  searchFieldUsage(fieldName: string): SearchResult[] {
-    return this.search({
-      query: fieldName,
-      filters: { all: true },
-      maxResults: 500,
-    });
-  }
-
-  /**
-   * Search for all usages of a specific object API name.
-   */
-  searchObjectUsage(objectName: string): SearchResult[] {
-    return this.search({
-      query: objectName,
-      filters: { all: true },
-      maxResults: 500,
-    });
   }
 
   // ── Search History ──────────────────────────────────────────────────────
