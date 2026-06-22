@@ -60,81 +60,50 @@ export class ImpactAnalyzer {
    */
   analyze(metadataName: string): ImpactReport {
     const startTime = Date.now();
-    const graph = this.indexer.getReferenceGraph();
     const allReferences: ReferenceEntry[] = [];
-    const visited = new Set<string>(); // cycle detection: tracks filePath keys
+    // Dedup references by file:line:column:keyword so multiple distinct
+    // references on the same line are all retained.
+    const seenRefs = new Set<string>();
+    // Names already expanded — used for both cycle detection and to avoid
+    // re-walking the same identifier.
+    const walkedNames = new Set<string>();
     let hasCircularDeps = false;
     let maxDepthReached = 0;
     const maxDepth = this.getMaxDepth();
 
-    // Recursive multi-hop walker
+    // Recursive multi-hop walker. Uses precise lookup (exact identifier or a
+    // dot/underscore segment), never the old bidirectional substring match
+    // that produced spurious matches and inflated risk.
     const walkReferences = (name: string, depth: number): void => {
       if (depth > maxDepth) { return; }
-      maxDepthReached = Math.max(maxDepthReached, depth);
       const normalizedName = name.toLowerCase();
+      if (walkedNames.has(normalizedName)) {
+        hasCircularDeps = true;
+        return;
+      }
+      walkedNames.add(normalizedName);
+      maxDepthReached = Math.max(maxDepthReached, depth);
 
-      for (const [keyword, entries] of graph.entries()) {
-        const keyLower = keyword.toLowerCase();
-        if (
-          keyLower === normalizedName ||
-          keyLower.includes(normalizedName) ||
-          normalizedName.includes(keyLower)
-        ) {
-          for (const entry of entries) {
-            const key = `${entry.filePath}:${entry.line}`;
-            if (visited.has(key)) {
-              hasCircularDeps = true;
-              continue;
-            }
-            visited.add(key);
-            allReferences.push(entry);
+      for (const entry of this.indexer.lookupPrecise(name)) {
+        const key = `${entry.filePath}:${entry.line}:${entry.column}:${entry.keyword.toLowerCase()}`;
+        if (!seenRefs.has(key)) {
+          seenRefs.add(key);
+          allReferences.push(entry);
+        }
 
-            // Multi-hop: follow references from this file (by its base name without extension)
-            if (depth < maxDepth) {
-              const baseName = entry.fileName.replace(/\.\w+$/, '');
-              if (baseName.toLowerCase() !== normalizedName) {
-                walkReferences(baseName, depth + 1);
-              }
-            }
+        // Multi-hop: follow references from this file (by its base name).
+        if (depth < maxDepth) {
+          const baseName = entry.fileName.replace(/\.\w+$/, '');
+          if (baseName.toLowerCase() !== normalizedName) {
+            walkReferences(baseName, depth + 1);
           }
         }
       }
     };
 
-    // Start the walk at depth 0
+    // Start the walk at depth 0. Precise lookup already resolves Object.Field
+    // patterns (e.g. "Account.Status__c" and the bare "Status__c" segment).
     walkReferences(metadataName, 0);
-
-    // Also handle Object.Field patterns
-    const parts = metadataName.split('.');
-    if (parts.length === 1) {
-      for (const [keyword, entries] of graph.entries()) {
-        const keyParts = keyword.split('.');
-        if (keyParts.length === 2 && keyParts[1].toLowerCase() === metadataName.toLowerCase()) {
-          for (const entry of entries) {
-            const key = `${entry.filePath}:${entry.line}`;
-            if (!visited.has(key)) {
-              visited.add(key);
-              allReferences.push(entry);
-            }
-          }
-        }
-      }
-    }
-
-    if (parts.length === 2) {
-      const fieldOnly = parts[1].toLowerCase();
-      for (const [keyword, entries] of graph.entries()) {
-        if (keyword.toLowerCase() === fieldOnly) {
-          for (const entry of entries) {
-            const key = `${entry.filePath}:${entry.line}`;
-            if (!visited.has(key)) {
-              visited.add(key);
-              allReferences.push(entry);
-            }
-          }
-        }
-      }
-    }
 
     // Group by metadata type
     const byType = new Map<MetadataType, ReferenceEntry[]>();

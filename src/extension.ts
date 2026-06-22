@@ -34,6 +34,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Services
   const sfService = new SalesforceService(outputChannel);
   const indexer = new MetadataIndexer(context, outputChannel);
+  // Ensure watchers are disposed and the pending persist is flushed on exit.
+  context.subscriptions.push({ dispose: () => indexer.dispose() });
   const searchEngine = new SearchEngine(indexer, outputChannel);
   const impactAnalyzer = new ImpactAnalyzer(indexer, outputChannel);
 
@@ -48,27 +50,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: impactView,
   });
 
-  // Wire search panel events → tree views
-  let searchPanelSub: vscode.Disposable | undefined;
-
-  function wireSearchPanel(panel: SearchPanel): void {
-    // Dispose previous subscription if panel was recreated
-    searchPanelSub?.dispose();
-    searchPanelSub = panel.onDidSearch((e: SearchEvent) => {
-      // Update Results tree with search results
+  // Sidebar tree views update on every search via a stable, panel-independent
+  // event. Subscribing once here means tree updates never depend on which panel
+  // instance served the search or on panel open/close timing.
+  context.subscriptions.push(
+    SearchPanel.onDidSearchStatic((e: SearchEvent) => {
       resultsView.setResults(e.results, e.query);
-      // Run Impact Analysis for the same query and update Impact tree
-      impactView.analyze(e.query);
-    });
-  }
+      // Impact analysis is computed from the local dependency graph, so it only
+      // applies to local searches. For Connected-Org results, show a notice
+      // rather than a misleading "no dependents".
+      if (e.mode === 'org') {
+        impactView.showNotice('Impact analysis is available for Local Project searches.');
+      } else {
+        impactView.analyze(e.query);
+      }
+    })
+  );
 
-  // Auto-open the Search Panel when the sidebar container becomes visible
-  resultsTreeView.onDidChangeVisibility((e) => {
-    if (e.visible) {
-      const panel = SearchPanel.createOrShow(context.extensionUri, searchEngine, sfService);
-      wireSearchPanel(panel);
-    }
-  });
+  const openSearchPanel = (): SearchPanel =>
+    SearchPanel.createOrShow(context.extensionUri, searchEngine, sfService);
+
+  // Auto-open the Search Panel when the sidebar view becomes visible. Also open
+  // it if the view is already visible at activation — the first visibility event
+  // can fire before this listener is attached (extension activated *by* the
+  // view becoming visible), which previously left the panel unopened.
+  context.subscriptions.push(
+    resultsTreeView.onDidChangeVisibility((e) => {
+      if (e.visible) { openSearchPanel(); }
+    })
+  );
+  if (resultsTreeView.visible) { openSearchPanel(); }
 
   context.subscriptions.push(resultsTreeView, impactTreeView);
 
@@ -105,147 +116,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // 1. Open search panel
   context.subscriptions.push(
     vscode.commands.registerCommand('sfSearch.search', (query?: string) => {
-      const panel = SearchPanel.createOrShow(
-        context.extensionUri,
-        searchEngine,
-        sfService
-      );
-      wireSearchPanel(panel);
+      const panel = openSearchPanel();
       if (typeof query === 'string' && query.length > 0) {
         panel.triggerSearch(query);
       }
     })
   );
 
-  // 2. Impact analysis (via command palette or context menu)
+  // 2. Search selection or word at cursor (editor context menu + palette).
+  //    Replaces the old fieldUsage / objectUsage / searchFromEditor /
+  //    searchSelection commands, which all did the same thing.
   context.subscriptions.push(
-    vscode.commands.registerCommand('sfSearch.impactAnalysis', async () => {
-      // If invoked from context menu with selection, use it; otherwise prompt
-      let input: string | undefined;
-      const editor = vscode.window.activeTextEditor;
-      if (editor) {
-        const selection = editor.document.getText(editor.selection);
-        if (selection && selection.trim().length > 0) {
-          input = selection.trim();
-        }
-      }
-      if (!input) {
-        input = await vscode.window.showInputBox({
-          prompt: 'Enter metadata name for impact analysis',
-          placeHolder: 'e.g., Account.Industry, MyApexClass',
-        });
-      }
-      if (!input) {
-        return;
-      }
-
-      const report = impactAnalyzer.analyze(input);
-      impactView.analyze(input);
-      resultsView.clear();
-
-      if (report.totalReferences === 0) {
-        vscode.window.showInformationMessage(
-          `No references found for "${input}" in the project.`
-        );
-      } else {
-        vscode.window.showInformationMessage(
-          `Found ${report.totalReferences} reference(s) to "${input}".`
-        );
-      }
-    })
-  );
-
-  // 3. Field usage (context menu)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('sfSearch.fieldUsage', () => {
+    vscode.commands.registerCommand('sfSearch.searchHere', () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
+        vscode.window.showWarningMessage('Open a file and place the cursor on a name to search.');
         return;
       }
-
-      const selection = editor.document.getText(editor.selection);
+      const selection = editor.document.getText(editor.selection).trim();
       const word = selection || getWordAtCursor(editor);
       if (!word) {
         vscode.window.showWarningMessage('No text selected or word under cursor.');
         return;
       }
-
-      const panel = SearchPanel.createOrShow(
-        context.extensionUri,
-        searchEngine,
-        sfService
-      );
-      wireSearchPanel(panel);
-      panel.triggerSearch(word);
-    })
-  );
-
-  // 4. Object usage (context menu)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('sfSearch.objectUsage', () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        return;
-      }
-
-      const selection = editor.document.getText(editor.selection);
-      const word = selection || getWordAtCursor(editor);
-      if (!word) {
-        vscode.window.showWarningMessage('No text selected or word under cursor.');
-        return;
-      }
-
-      const panel = SearchPanel.createOrShow(
-        context.extensionUri,
-        searchEngine,
-        sfService
-      );
-      wireSearchPanel(panel);
-      panel.triggerSearch(word);
-    })
-  );
-
-  // 5. Search word at cursor (editor context menu)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('sfSearch.searchFromEditor', () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        return;
-      }
-      const word = getWordAtCursor(editor);
-      if (!word) {
-        vscode.window.showWarningMessage('No word found at cursor position.');
-        return;
-      }
-      const panel = SearchPanel.createOrShow(
-        context.extensionUri,
-        searchEngine,
-        sfService
-      );
-      wireSearchPanel(panel);
-      panel.triggerSearch(word);
-    })
-  );
-
-  // 6. Search selection (editor context menu)
-  context.subscriptions.push(
-    vscode.commands.registerCommand('sfSearch.searchSelection', () => {
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        return;
-      }
-      const selection = editor.document.getText(editor.selection);
-      if (!selection) {
-        vscode.window.showWarningMessage('No text selected.');
-        return;
-      }
-      const panel = SearchPanel.createOrShow(
-        context.extensionUri,
-        searchEngine,
-        sfService
-      );
-      wireSearchPanel(panel);
-      panel.triggerSearch(selection);
+      openSearchPanel().triggerSearch(word);
     })
   );
 
@@ -321,9 +215,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       impactView.analyze(name);
       const report = impactAnalyzer.analyze(name);
-      vscode.window.showInformationMessage(
-        `Impact: ${report.totalReferences} refs, risk=${report.riskLevel} (${report.riskScore}/100)`
-      );
+      if (report.totalReferences === 0) {
+        vscode.window.showInformationMessage(`No references found for "${name}" in the project.`);
+      } else {
+        vscode.window.showInformationMessage(
+          `Impact: ${report.totalReferences} reference(s) across ${report.affectedFiles} file(s) — risk ${report.riskLevel} (${report.riskScore}/100).`
+        );
+      }
     })
   );
 
@@ -399,13 +297,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
 
       if (selected) {
-        const panel = SearchPanel.createOrShow(
-          context.extensionUri,
-          searchEngine,
-          sfService
-        );
-        wireSearchPanel(panel);
-        panel.triggerSearch(selected.label);
+        openSearchPanel().triggerSearch(selected.label);
       }
     })
   );

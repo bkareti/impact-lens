@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as nodeFs from 'fs';
 import { Worker } from 'worker_threads';
 import MiniSearch from 'minisearch';
 import {
@@ -11,9 +12,17 @@ import {
   WorkerMessageType,
 } from '../models/searchResult';
 import { parseFile, classifyFile } from './fileParser';
+import { indexTokenize, preciseTokens } from './tokenize';
 
-const INDEX_VERSION = 2;
+// Bumped to 3: reference-graph matching semantics changed (precise-by-default).
+const INDEX_VERSION = 3;
 const INDEX_FILE = 'search-index.json';
+
+/** Per-glob cap passed to vscode.workspace.findFiles. */
+const MAX_FILES_PER_GLOB = 50000;
+
+/** Debounce window (ms) for coalescing index persistence writes. */
+const PERSIST_DEBOUNCE_MS = 2000;
 
 /**
  * Glob patterns for Salesforce metadata files.
@@ -62,6 +71,18 @@ export class MetadataIndexer {
   private context: vscode.ExtensionContext;
   private outputChannel: vscode.OutputChannel;
 
+  // ── Derived lookup indexes (in-memory only; rebuilt lazily, not persisted) ──
+  /** lowercased keyword -> aggregated reference entries (O(1) exact lookup). */
+  private exactIndex: Map<string, ReferenceEntry[]> = new Map();
+  /** precise token -> set of lowercased keywords containing that token. */
+  private tokenIndex: Map<string, Set<string>> = new Map();
+  /** When true, the derived indexes are stale and rebuilt on next lookup. */
+  private derivedDirty = true;
+
+  /** Debounced-persist handle and one-shot truncation warning guard. */
+  private persistTimer: ReturnType<typeof setTimeout> | undefined;
+  private warnedTruncation = false;
+
   private readonly onDidUpdateIndex = new vscode.EventEmitter<void>();
   public readonly onIndexUpdated = this.onDidUpdateIndex.event;
 
@@ -84,31 +105,7 @@ export class MetadataIndexer {
         fuzzy: this.getFuzzyTolerance(),
         prefix: true,
       },
-      tokenize: (text: string): string[] => {
-        return text
-          .split(/[\s.,;:!?(){}\[\]<>/\\|@#$%^&*+=~`'"]+/)
-          .flatMap((token) => {
-            const parts: string[] = [token];
-            // Split camelCase / PascalCase
-            const camelSplit = token.split(/(?=[A-Z])/).filter(Boolean);
-            if (camelSplit.length > 1) {
-              parts.push(...camelSplit);
-            }
-            // Split on underscores (common in SF API names)
-            const underscoreSplit = token.split('_').filter(Boolean);
-            if (underscoreSplit.length > 1) {
-              parts.push(...underscoreSplit);
-            }
-            // Handle Object.Field format
-            const dotSplit = token.split('.');
-            if (dotSplit.length > 1) {
-              parts.push(...dotSplit);
-            }
-            return parts;
-          })
-          .filter(Boolean)
-          .map((t) => t.toLowerCase());
-      },
+      tokenize: indexTokenize,
     });
   }
 
@@ -157,6 +154,7 @@ export class MetadataIndexer {
     this.referenceGraph.clear();
     this.fileMtimes.clear();
     this.indexedDocuments.clear();
+    this.derivedDirty = true;
     await this.buildFullIndex();
   }
 
@@ -167,11 +165,112 @@ export class MetadataIndexer {
     return this.searchIndex;
   }
 
+  // ─────────────────────────────────────────────────────────────────
+  // Fast lookup API (backed by derived indexes)
+  // ─────────────────────────────────────────────────────────────────
+
   /**
-   * Get the reference graph.
+   * Rebuild the derived exact/token indexes from the reference graph.
+   * Runs at most once per batch of mutations (guarded by `derivedDirty`).
    */
-  getReferenceGraph(): Map<string, ReferenceEntry[]> {
-    return this.referenceGraph;
+  private ensureDerived(): void {
+    if (!this.derivedDirty) {
+      return;
+    }
+    this.exactIndex.clear();
+    this.tokenIndex.clear();
+
+    for (const [keyword, entries] of this.referenceGraph.entries()) {
+      const lower = keyword.toLowerCase();
+      const bucket = this.exactIndex.get(lower);
+      if (bucket) {
+        bucket.push(...entries);
+      } else {
+        this.exactIndex.set(lower, [...entries]);
+      }
+      for (const token of preciseTokens(keyword)) {
+        let set = this.tokenIndex.get(token);
+        if (!set) {
+          set = new Set<string>();
+          this.tokenIndex.set(token, set);
+        }
+        set.add(lower);
+      }
+    }
+    this.derivedDirty = false;
+  }
+
+  /**
+   * Exact (case-insensitive) keyword lookup. O(1).
+   */
+  lookupExact(name: string): ReferenceEntry[] {
+    this.ensureDerived();
+    return this.exactIndex.get(name.toLowerCase()) ?? [];
+  }
+
+  /**
+   * Precise lookup: matches the whole identifier or any dot/underscore
+   * segment of a keyword (never camelCase). "Account" matches `Account` and
+   * `Account.Name` but not `AccountService`. Backed by the token index.
+   */
+  lookupPrecise(name: string): ReferenceEntry[] {
+    this.ensureDerived();
+    const query = name.toLowerCase().trim();
+    if (!query) {
+      return [];
+    }
+
+    const collect = (token: string): ReferenceEntry[] => {
+      const keywords = this.tokenIndex.get(token);
+      if (!keywords) {
+        return [];
+      }
+      const out: ReferenceEntry[] = [];
+      for (const keyword of keywords) {
+        const entries = this.exactIndex.get(keyword);
+        if (entries) {
+          out.push(...entries);
+        }
+      }
+      return out;
+    };
+
+    let results = collect(query);
+    // Fall back to the trailing field segment for dotted queries
+    // (e.g. "Account.Status__c" when only "Status__c" is indexed).
+    if (results.length === 0 && query.includes('.')) {
+      const last = query.split('.').pop() ?? '';
+      if (last.length >= 2) {
+        results = collect(last);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Broad (substring) lookup — opt-in, used by the panel's "contains" mode.
+   * Scans unique keywords; only invoked when the user explicitly broadens.
+   */
+  lookupBroad(name: string): ReferenceEntry[] {
+    this.ensureDerived();
+    const query = name.toLowerCase().trim();
+    if (!query) {
+      return [];
+    }
+    const out: ReferenceEntry[] = [];
+    for (const [keyword, entries] of this.exactIndex.entries()) {
+      if (keyword.includes(query)) {
+        out.push(...entries);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Count precise references to an identifier (used by CodeLens/Hover).
+   */
+  countReferences(name: string): number {
+    return this.lookupPrecise(name).length;
   }
 
   /**
@@ -197,6 +296,12 @@ export class MetadataIndexer {
     }
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
+    }
+    // Flush any pending debounced persist so the last edits aren't lost.
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = undefined;
+      void this.persistIndex();
     }
     this.onDidUpdateIndex.dispose();
   }
@@ -279,8 +384,12 @@ export class MetadataIndexer {
     const allFiles: Array<{ path: string; metadataType: MetadataType }> = [];
     const seen = new Set<string>();
 
+    let truncated = false;
     for (const glob of SF_FILE_GLOBS) {
-      const uris = await vscode.workspace.findFiles(glob.pattern, excludePattern, 50000);
+      const uris = await vscode.workspace.findFiles(glob.pattern, excludePattern, MAX_FILES_PER_GLOB);
+      if (uris.length >= MAX_FILES_PER_GLOB) {
+        truncated = true;
+      }
       for (const uri of uris) {
         if (!seen.has(uri.fsPath)) {
           seen.add(uri.fsPath);
@@ -290,6 +399,15 @@ export class MetadataIndexer {
           });
         }
       }
+    }
+
+    if (truncated && !this.warnedTruncation) {
+      this.warnedTruncation = true;
+      const msg = `[Indexer] File discovery hit the ${MAX_FILES_PER_GLOB}-file cap for at least one pattern; the index may be incomplete.`;
+      this.outputChannel.appendLine(msg);
+      vscode.window.showWarningMessage(
+        `ImpactLens: this project exceeds ${MAX_FILES_PER_GLOB} files for some metadata types. Search and impact results may be incomplete.`
+      );
     }
 
     return allFiles;
@@ -425,7 +543,6 @@ export class MetadataIndexer {
 
       // Track file mtime
       try {
-        const nodeFs = require('fs');
         const stat = nodeFs.statSync(parsed.filePath);
         this.fileMtimes.set(parsed.filePath, stat.mtimeMs);
       } catch {
@@ -435,6 +552,9 @@ export class MetadataIndexer {
 
     // Add all documents to MiniSearch
     this.searchIndex.addAll(documents);
+
+    // Derived lookup indexes are now stale.
+    this.derivedDirty = true;
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -447,7 +567,6 @@ export class MetadataIndexer {
   private async incrementalUpdate(): Promise<void> {
     const files = await this.discoverFiles();
     const staleFiles: Array<{ path: string; metadataType: MetadataType }> = [];
-    const nodeFs = require('fs');
 
     for (const file of files) {
       try {
@@ -497,6 +616,8 @@ export class MetadataIndexer {
       this.buildIndexFromParsedFiles([{ ...parsed, content: '' }]);
 
       this.outputChannel.appendLine(`[Indexer] Updated index for: ${path.basename(filePath)}`);
+      // Coalesce rapid saves into a single debounced disk write.
+      this.schedulePersist();
       this.onDidUpdateIndex.fire();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -528,6 +649,7 @@ export class MetadataIndexer {
     }
 
     this.fileMtimes.delete(filePath);
+    this.derivedDirty = true;
   }
 
   // ─────────────────────────────────────────────────────────────────
@@ -578,6 +700,20 @@ export class MetadataIndexer {
   // ─────────────────────────────────────────────────────────────────
   // Persistence
   // ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Coalesce frequent incremental updates into a single debounced disk write,
+   * avoiding repeated multi-MB serializations on rapid file saves.
+   */
+  private schedulePersist(): void {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+    }
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined;
+      void this.persistIndex();
+    }, PERSIST_DEBOUNCE_MS);
+  }
 
   private async persistIndex(): Promise<void> {
     try {
@@ -633,6 +769,7 @@ export class MetadataIndexer {
         this.fileMtimes.set(file, mtime);
       }
 
+      this.derivedDirty = true;
       this.outputChannel.appendLine(
         `[Indexer] Loaded cached index: ${data.documents.length} files, ${Object.keys(data.referenceGraph).length} references.`
       );

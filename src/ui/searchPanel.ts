@@ -7,6 +7,8 @@ import { SalesforceService, OrgSearchResult, OrgCacheProgressFn } from '../servi
 export interface SearchEvent {
   query: string;
   results: SearchResult[];
+  /** Which search backend produced the results. */
+  mode: 'local' | 'org';
 }
 
 /**
@@ -21,9 +23,14 @@ export class SearchPanel {
   private readonly sfService: SalesforceService;
   private readonly disposables: vscode.Disposable[] = [];
 
-  /** Fires after every local search with the query and results. */
-  private readonly _onDidSearch = new vscode.EventEmitter<SearchEvent>();
-  public readonly onDidSearch = this._onDidSearch.event;
+  /**
+   * Stable, panel-independent search event. Survives panel recreation and
+   * restore, so consumers (e.g. the sidebar tree views) can subscribe once at
+   * activation and always receive updates regardless of which panel instance
+   * served the search.
+   */
+  private static readonly _onDidSearchStatic = new vscode.EventEmitter<SearchEvent>();
+  public static readonly onDidSearchStatic = SearchPanel._onDidSearchStatic.event;
 
   public static createOrShow(
     extensionUri: vscode.Uri,
@@ -73,6 +80,7 @@ export class SearchPanel {
         query?: string;
         filters?: SearchFilters;
         exactMatch?: boolean;
+        broad?: boolean;
         searchMode?: string;
         filePath?: string;
         line?: number;
@@ -87,9 +95,18 @@ export class SearchPanel {
                 await this.handleSearch(
                   message.query,
                   message.filters,
-                  message.exactMatch ?? false
+                  message.exactMatch ?? false,
+                  message.broad ?? false
                 );
               }
+            }
+            break;
+          case 'enableOrgSearch':
+            await vscode.workspace
+              .getConfiguration('sfSearch')
+              .update('enableToolingApi', true, vscode.ConfigurationTarget.Global);
+            if (message.query) {
+              await this.handleOrgSearch(message.query);
             }
             break;
           case 'refreshOrgCache':
@@ -105,6 +122,9 @@ export class SearchPanel {
               await vscode.env.clipboard.writeText(message.text);
             }
             break;
+          default:
+            console.warn(`[ImpactLens] Unknown webview command: ${message.command}`);
+            break;
         }
       },
       null,
@@ -118,7 +138,8 @@ export class SearchPanel {
   private async handleSearch(
     query: string,
     filters?: SearchFilters,
-    exactMatch: boolean = false
+    exactMatch: boolean = false,
+    broad: boolean = false
   ): Promise<void> {
     if (!query) {
       return;
@@ -128,6 +149,7 @@ export class SearchPanel {
       query,
       filters,
       exactMatch,
+      broad,
       maxResults: 500,
     });
 
@@ -145,10 +167,11 @@ export class SearchPanel {
       query,
       totalResults: results.length,
       exactMatch,
+      broad,
     });
 
     // Notify listeners (tree views) with the full results
-    this._onDidSearch.fire({ query, results });
+    SearchPanel._onDidSearchStatic.fire({ query, results, mode: 'local' });
   }
 
   /**
@@ -157,6 +180,25 @@ export class SearchPanel {
    */
   private async handleOrgSearch(query: string): Promise<void> {
     if (!query) {
+      return;
+    }
+
+    // Connected-org search requires the Tooling API to be enabled. Rather than
+    // silently returning nothing (or showing a scary error), render a friendly
+    // empty state with an inline button to turn it on.
+    const toolingEnabled = vscode.workspace
+      .getConfiguration('sfSearch')
+      .get<boolean>('enableToolingApi', false);
+    if (!toolingEnabled) {
+      this.panel.webview.postMessage({
+        command: 'searchResults',
+        results: [],
+        query,
+        totalResults: 0,
+        exactMatch: false,
+        searchMode: 'org',
+        needsEnable: true,
+      });
       return;
     }
 
@@ -192,6 +234,9 @@ export class SearchPanel {
         searchMode: 'org',
         cacheSize: this.sfService.orgCacheSize,
       });
+
+      // Mirror org results into the sidebar trees as well.
+      SearchPanel._onDidSearchStatic.fire({ query, results: results as unknown as SearchResult[], mode: 'org' });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(`Org search: ${message}`);
@@ -272,7 +317,6 @@ export class SearchPanel {
 
   private dispose(): void {
     SearchPanel.currentPanel = undefined;
-    this._onDidSearch.dispose();
     this.panel.dispose();
     while (this.disposables.length) {
       const disposable = this.disposables.pop();
@@ -820,6 +864,10 @@ export class SearchPanel {
               <input type="checkbox" id="exactMatchToggle" />
               <span>Exact match</span>
             </label>
+            <label class="toggle-label" title="Match any name that contains your query (broader, noisier). Off = precise identifier/segment match.">
+              <input type="checkbox" id="broadMatchToggle" />
+              <span>Broad (contains)</span>
+            </label>
             <span class="quick-hint">Press <strong>/</strong> to focus search</span>
           </div>
           <div class="option-row-right">
@@ -926,6 +974,7 @@ export class SearchPanel {
       sortDirection: persistedState.sortDirection || 'desc',
       tableFilter: persistedState.tableFilter || '',
       exactMatch: persistedState.exactMatch || false,
+      broad: persistedState.broad || false,
       searchMode: persistedState.searchMode || 'local',
       filters: Object.assign({}, defaultFilters, persistedState.filters || {}),
       isLoading: false,
@@ -942,6 +991,7 @@ export class SearchPanel {
         sortDirection: searchState.sortDirection,
         tableFilter: searchState.tableFilter,
         exactMatch: searchState.exactMatch,
+        broad: searchState.broad,
         searchMode: searchState.searchMode,
         filters: searchState.filters,
       });
@@ -1083,6 +1133,7 @@ export class SearchPanel {
       searchState.query = query;
       searchState.filters = getFiltersFromUi();
       searchState.exactMatch = document.getElementById('exactMatchToggle').checked;
+      searchState.broad = document.getElementById('broadMatchToggle').checked;
       searchState.isLoading = true;
       persistUiState();
       renderStatus();
@@ -1098,6 +1149,7 @@ export class SearchPanel {
         query,
         filters: searchState.filters,
         exactMatch: searchState.exactMatch,
+        broad: searchState.broad,
         searchMode: searchState.searchMode,
       });
     }
@@ -1232,7 +1284,7 @@ export class SearchPanel {
         return;
       }
 
-      const mode = searchState.exactMatch ? 'Exact' : 'Smart';
+      const mode = searchState.exactMatch ? 'Exact' : (searchState.broad ? 'Broad' : 'Precise');
       const filterCount = Object.values(searchState.filters).filter(Boolean).length;
       statusElement.textContent = modeLabel + ' • ' + mode + ' search • ' + filterCount + ' filter' + (filterCount === 1 ? '' : 's') + ' enabled';
     }
@@ -1352,12 +1404,19 @@ export class SearchPanel {
       return html;
     }
 
-    function renderEmptyState(title, message) {
-      document.getElementById('searchResults').innerHTML =
-        '<div class="empty-state">'
+    function renderEmptyState(title, message, action) {
+      var html = '<div class="empty-state">'
         + '<div class="empty-state-title">' + escapeHtml(title) + '</div>'
-        + '<p>' + escapeHtml(message) + '</p>'
-        + '</div>';
+        + '<p>' + escapeHtml(message) + '</p>';
+      if (action && action.label) {
+        html += '<button id="emptyStateActionBtn" style="margin-top:12px;">' + escapeHtml(action.label) + '</button>';
+      }
+      html += '</div>';
+      document.getElementById('searchResults').innerHTML = html;
+      if (action && typeof action.onClick === 'function') {
+        var btn = document.getElementById('emptyStateActionBtn');
+        if (btn) { btn.addEventListener('click', action.onClick); }
+      }
     }
 
     function renderCurrentResults() {
@@ -1455,6 +1514,7 @@ export class SearchPanel {
       document.getElementById('resultsFilterInput').value = searchState.tableFilter;
       document.getElementById('pageSizeSelect').value = String(searchState.pageSize);
       document.getElementById('exactMatchToggle').checked = Boolean(searchState.exactMatch);
+      document.getElementById('broadMatchToggle').checked = Boolean(searchState.broad);
       // Restore search mode toggle
       var isOrg = searchState.searchMode === 'org';
       document.getElementById('modeLocal').classList.toggle('active', !isOrg);
@@ -1540,6 +1600,27 @@ export class SearchPanel {
 
     document.getElementById('exactMatchToggle').addEventListener('change', (event) => {
       searchState.exactMatch = event.target.checked;
+      // Exact and Broad are mutually exclusive.
+      if (searchState.exactMatch) {
+        searchState.broad = false;
+        document.getElementById('broadMatchToggle').checked = false;
+      }
+      persistUiState();
+      if (searchState.query) {
+        doSearch();
+      } else {
+        renderStatus();
+        renderSummaryPills(0, 0, 0, 0);
+      }
+    });
+
+    document.getElementById('broadMatchToggle').addEventListener('change', (event) => {
+      searchState.broad = event.target.checked;
+      // Exact and Broad are mutually exclusive.
+      if (searchState.broad) {
+        searchState.exactMatch = false;
+        document.getElementById('exactMatchToggle').checked = false;
+      }
       persistUiState();
       if (searchState.query) {
         doSearch();
@@ -1617,6 +1698,9 @@ export class SearchPanel {
         }
         searchState.query = nextQuery;
         searchState.exactMatch = Boolean(message.exactMatch);
+        if (typeof message.broad === 'boolean') {
+          searchState.broad = message.broad;
+        }
         searchState.allResults = message.results || [];
         searchState.lastResultCount = message.totalResults || searchState.allResults.length;
         searchState.isLoading = false;
@@ -1628,7 +1712,21 @@ export class SearchPanel {
 
         persistUiState();
 
-        if (message.error) {
+        if (message.needsEnable) {
+          renderEmptyState(
+            'Connected-Org search is off',
+            'Searching a connected org uses the Salesforce CLI Tooling API, which is disabled by default. Enable it to cache and search your default org’s metadata. Requires the Salesforce CLI and a default org (sf org login web).',
+            {
+              label: '⚡ Enable Connected-Org Search',
+              onClick: function () {
+                vscode.postMessage({ command: 'enableOrgSearch', query: searchState.query });
+                showLoading('Enabling connected-org search…');
+              },
+            }
+          );
+          renderStatus();
+          renderSummaryPills(0, 0, 0, 0);
+        } else if (message.error) {
           renderEmptyState('Org Search Error', message.error);
           renderStatus();
           renderSummaryPills(0, 0, 0, 0);

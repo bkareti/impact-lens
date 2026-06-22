@@ -19,6 +19,7 @@ export class ImpactViewProvider implements vscode.TreeDataProvider<ImpactTreeIte
   private analyzedName = '';
   private totalRefs = 0;
   private lastReport: ImpactReport | null = null;
+  private noticeText: string | null = null;
 
   constructor(impactAnalyzer: ImpactAnalyzer) {
     this.impactAnalyzer = impactAnalyzer;
@@ -28,10 +29,25 @@ export class ImpactViewProvider implements vscode.TreeDataProvider<ImpactTreeIte
 
   /** Analyze and display impact for the given metadata name. */
   analyze(metadataName: string): void {
+    this.noticeText = null;
     this.analyzedName = metadataName;
     this.rootNode = this.impactAnalyzer.buildDependencyTree(metadataName);
     this.lastReport = this.impactAnalyzer.analyze(metadataName);
     this.totalRefs = this._countNodes(this.rootNode);
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  /**
+   * Show an informational placeholder instead of an analysis result — used when
+   * impact analysis isn't applicable (e.g. Connected-Org search results, which
+   * aren't part of the local dependency graph).
+   */
+  showNotice(text: string): void {
+    this.rootNode = null;
+    this.lastReport = null;
+    this.totalRefs = 0;
+    this.analyzedName = '';
+    this.noticeText = text;
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -46,6 +62,7 @@ export class ImpactViewProvider implements vscode.TreeDataProvider<ImpactTreeIte
     this.analyzedName = '';
     this.totalRefs = 0;
     this.lastReport = null;
+    this.noticeText = null;
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -72,12 +89,12 @@ export class ImpactViewProvider implements vscode.TreeDataProvider<ImpactTreeIte
   private _getRootItems(): ImpactTreeItem[] {
     if (!this.rootNode) {
       const placeholder = new ImpactTreeItem(
-        'Run impact analysis to see dependencies',
+        this.noticeText ?? 'Run impact analysis to see dependencies',
         vscode.TreeItemCollapsibleState.None,
         'placeholder'
       );
       placeholder.iconPath = new vscode.ThemeIcon(
-        'target',
+        this.noticeText ? 'info' : 'target',
         new vscode.ThemeColor('disabledForeground')
       );
       return [placeholder];

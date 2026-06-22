@@ -450,7 +450,7 @@ function parseVisualforce(content: string, lines: string[]): { refs: string[]; m
 /**
  * Parse an XML metadata file for references.
  */
-function parseXml(content: string, lines: string[], metadataType: MetadataType): { refs: string[]; methods: string[]; lineRefs: LineReference[] } {
+function parseXml(content: string, lines: string[], _metadataType: MetadataType): { refs: string[]; methods: string[]; lineRefs: LineReference[] } {
   const refs: Set<string> = new Set();
   const lineRefs: LineReference[] = [];
 

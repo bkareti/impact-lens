@@ -2,7 +2,7 @@
   "name": "impactlens",
   "displayName": "ImpactLens - Salesforce Dependency Analyzer",
   "description": "Powerful search and impact analysis for Salesforce DX projects. Search fields, objects, metadata, and keywords across your entire project with dependency mapping.",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "publisher": "BabuKareti",
   "license": "MIT",
   "repository": {
@@ -30,18 +30,7 @@
   "icon": "resources/icon.png",
   "main": "./dist/extension.js",
   "activationEvents": [
-    "workspaceContains:**/sfdx-project.json",
-    "onCommand:sfSearch.search",
-    "onCommand:sfSearch.impactAnalysis",
-    "onCommand:sfSearch.fieldUsage",
-    "onCommand:sfSearch.objectUsage",
-    "onCommand:sfSearch.rebuildIndex",
-    "onCommand:sfSearch.searchFromEditor",
-    "onCommand:sfSearch.searchSelection",
-    "onCommand:sfSearch.analyzeImpact",
-    "onCommand:sfSearch.exportImpact",
-    "onCommand:sfSearch.exportResults",
-    "onCommand:sfSearch.searchHistory"
+    "workspaceContains:**/sfdx-project.json"
   ],
   "contributes": {
     "commands": [
@@ -51,33 +40,8 @@
         "icon": "$(search)"
       },
       {
-        "command": "sfSearch.impactAnalysis",
-        "title": "ImpactLens: Impact Analysis",
-        "icon": "$(references)"
-      },
-      {
-        "command": "sfSearch.fieldUsage",
-        "title": "ImpactLens: Find Field Usage",
-        "icon": "$(symbol-field)"
-      },
-      {
-        "command": "sfSearch.objectUsage",
-        "title": "ImpactLens: Find Object Usage",
-        "icon": "$(symbol-class)"
-      },
-      {
-        "command": "sfSearch.rebuildIndex",
-        "title": "ImpactLens: Rebuild Index",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "sfSearch.searchFromEditor",
-        "title": "ImpactLens: Search Word at Cursor",
-        "icon": "$(search)"
-      },
-      {
-        "command": "sfSearch.searchSelection",
-        "title": "ImpactLens: Search Selection",
+        "command": "sfSearch.searchHere",
+        "title": "ImpactLens: Search Selection or Word at Cursor",
         "icon": "$(search)"
       },
       {
@@ -86,13 +50,18 @@
         "icon": "$(pulse)"
       },
       {
-        "command": "sfSearch.exportImpact",
-        "title": "ImpactLens: Export Impact Report",
-        "icon": "$(export)"
+        "command": "sfSearch.rebuildIndex",
+        "title": "ImpactLens: Rebuild Index",
+        "icon": "$(refresh)"
       },
       {
         "command": "sfSearch.exportResults",
         "title": "ImpactLens: Export Search Results",
+        "icon": "$(export)"
+      },
+      {
+        "command": "sfSearch.exportImpact",
+        "title": "ImpactLens: Export Impact Report",
         "icon": "$(export)"
       },
       {
@@ -127,28 +96,13 @@
     "menus": {
       "editor/context": [
         {
-          "command": "sfSearch.searchSelection",
+          "command": "sfSearch.searchHere",
           "group": "sfSearch@0",
-          "when": "editorHasSelection"
+          "when": "editorTextFocus"
         },
         {
-          "command": "sfSearch.fieldUsage",
+          "command": "sfSearch.analyzeImpact",
           "group": "sfSearch@1",
-          "when": "editorTextFocus"
-        },
-        {
-          "command": "sfSearch.objectUsage",
-          "group": "sfSearch@2",
-          "when": "editorTextFocus"
-        },
-        {
-          "command": "sfSearch.impactAnalysis",
-          "group": "sfSearch@3",
-          "when": "editorTextFocus"
-        },
-        {
-          "command": "sfSearch.searchFromEditor",
-          "group": "sfSearch@4",
           "when": "editorTextFocus"
         }
       ],
@@ -220,6 +174,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show reference counts as CodeLens above Apex/LWC/Aura declarations."
+        },
+        "sfSearch.enableHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a mini impact summary when hovering over Salesforce API names."
         }
       }
     }
@@ -230,15 +189,20 @@
     "watch": "node esbuild.js --watch",
     "lint": "eslint src --ext ts",
     "compile": "tsc -p ./",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.74.0",
+    "@typescript-eslint/eslint-plugin": "^6.21.0",
+    "@typescript-eslint/parser": "^6.21.0",
     "@vscode/vsce": "^2.22.0",
     "esbuild": "^0.19.0",
     "eslint": "^8.56.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^1.6.1"
   },
   "dependencies": {
     "fast-xml-parser": "^4.3.0",
